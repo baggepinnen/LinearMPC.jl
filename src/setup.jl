@@ -95,19 +95,58 @@ function set_bounds!(mpc::MPC; umin=zeros(0), umax=zeros(0), ymin = zeros(0), ym
 end
 
 """
-    set_objective!(mpc;Q,R,Rr,S,Qf)
+    set_objective!(mpc;Q,R,Rr,S,Qf,Qfx,Q_traj,R_traj,Rr_traj)
 
-Set the weights in the objective function `xN' C' Qf C xN^T + ∑ (C xₖ - rₖ)' Q (C xₖ - rₖ)  + uₖ' R uₖ + Δuₖ' Rr Δuₖ + xₖ' S uₖ
+Set the weights in the objective function `xN' C' Qf C xN^T + ∑ (C xₖ - rₖ)' Qₖ (C xₖ - rₖ)  + uₖ' Rₖ uₖ + Δuₖ' Rrₖ Δuₖ + xₖ' S uₖ
 
 A vector is interpreted as a diagonal matrix.
+
+# Keyword Arguments
+- `Q`, `R`, `Rr`, `S`, `Qf`, `Qfx`: Constant weight matrices (existing behavior)
+- `Q_traj`: Vector of Q matrices, one per prediction step (length Np)
+- `R_traj`: Vector of R matrices, one per control step (length Nc)
+- `Rr_traj`: Vector of Rr matrices, one per control step (length Nc)
+
+When trajectories are provided, they override the constant matrices for the objective function.
+Trajectories shorter than the horizon are padded with the last element.
 """
-function set_objective!(mpc::MPC;Q = zeros(0,0), R=zeros(0,0), Rr=zeros(0,0), S= zeros(0,0), Qf=zeros(0,0), Qfx=zeros(0,0))
+function set_objective!(mpc::MPC;Q = zeros(0,0), R=zeros(0,0), Rr=zeros(0,0), S= zeros(0,0), Qf=zeros(0,0), Qfx=zeros(0,0),
+                        Q_traj=Matrix{Float64}[], R_traj=Matrix{Float64}[], Rr_traj=Matrix{Float64}[])
     isempty(Q)  || (mpc.weights.Q .= matrixify(Q,mpc.model.ny))
     isempty(R)  || (mpc.weights.R .= matrixify(R,mpc.model.nu))
     isempty(Rr) || (mpc.weights.Rr .= matrixify(Rr,mpc.model.nu))
     isempty(S)  || (mpc.weights.S .= float(S))
     isempty(Qf) || (mpc.weights.Qf .= matrixify(Qf,mpc.model.ny))
     isempty(Qfx) || (mpc.weights.Qfx .= matrixify(Qfx,mpc.model.nx))
+
+    # Handle time-varying cost trajectories
+    # Setting a constant Q/R/Rr clears the corresponding trajectory
+    if !isempty(Q)
+        mpc.weights.Q_traj = Matrix{Float64}[]
+    end
+    if !isempty(R)
+        mpc.weights.R_traj = Matrix{Float64}[]
+    end
+    if !isempty(Rr)
+        mpc.weights.Rr_traj = Matrix{Float64}[]
+    end
+
+    # Setting a trajectory overrides the clearing above
+    if !isempty(Q_traj)
+        mpc.weights.Q_traj = [matrixify(q, mpc.model.ny) for q in Q_traj]
+    end
+    if !isempty(R_traj)
+        mpc.weights.R_traj = [matrixify(r, mpc.model.nu) for r in R_traj]
+    end
+    if !isempty(Rr_traj)
+        mpc.weights.Rr_traj = [matrixify(rr, mpc.model.nu) for rr in Rr_traj]
+    end
+
+    # Auto-detect time-varying costs
+    mpc.settings.time_varying_costs = !isempty(mpc.weights.Q_traj) ||
+                                       !isempty(mpc.weights.R_traj) ||
+                                       !isempty(mpc.weights.Rr_traj)
+
     mpc.mpqp_issetup = false
 end
 set_weights! = set_objective! # backwards compatibility

@@ -1,4 +1,54 @@
-# Create Φ and Γ such that 
+# Helper functions for time-varying cost trajectories
+
+"""
+Get Q trajectory padded/clipped to length N.
+If no trajectory is provided, returns constant Q repeated N times.
+"""
+function get_Q_trajectory(mpc::MPC, N::Int)
+    traj = mpc.weights.Q_traj
+    if isempty(traj)
+        return [copy(mpc.weights.Q) for _ in 1:N]
+    end
+    if length(traj) >= N
+        return traj[1:N]
+    else
+        return [traj; [copy(traj[end]) for _ in 1:(N-length(traj))]]
+    end
+end
+
+"""
+Get R trajectory padded/clipped to length Nc.
+If no trajectory is provided, returns constant R repeated Nc times.
+"""
+function get_R_trajectory(mpc::MPC, Nc::Int)
+    traj = mpc.weights.R_traj
+    if isempty(traj)
+        return [copy(mpc.weights.R) for _ in 1:Nc]
+    end
+    if length(traj) >= Nc
+        return traj[1:Nc]
+    else
+        return [traj; [copy(traj[end]) for _ in 1:(Nc-length(traj))]]
+    end
+end
+
+"""
+Get Rr trajectory padded/clipped to length Nc.
+If no trajectory is provided, returns constant Rr repeated Nc times.
+"""
+function get_Rr_trajectory(mpc::MPC, Nc::Int)
+    traj = mpc.weights.Rr_traj
+    if isempty(traj)
+        return [copy(mpc.weights.Rr) for _ in 1:Nc]
+    end
+    if length(traj) >= Nc
+        return traj[1:Nc]
+    else
+        return [traj; [copy(traj[end]) for _ in 1:(Nc-length(traj))]]
+    end
+end
+
+# Create Φ and Γ such that
 # X = Φ x0 + Γ U  (where X and U contains xi and ui stacked..)
 function state_predictor(F,G,Np,Nc)
     nx,nu = size(G);
@@ -33,7 +83,10 @@ function get_parameter_dims(mpc::MPC)
     if mpc.settings.reference_preview && !mpc.settings.reference_condensation && nr > 0
         nr = nr * mpc.Np  # Reference preview uses Np time steps
     end
-    nuprev = iszero(mpc.weights.Rr) ? 0 : mpc.model.nu
+    # Check if any Rr is nonzero (constant or in trajectory)
+    has_Rr = !iszero(mpc.weights.Rr) ||
+             (!isempty(mpc.weights.Rr_traj) && any(!iszero(rr) for rr in mpc.weights.Rr_traj))
+    nuprev = has_Rr ? mpc.model.nu : 0
     return mpc.model.nx,nr,mpc.model.nd,nuprev
 end
 
@@ -235,9 +288,32 @@ function objective(Φ,Γ,C,Q,R,S,Qf,N,Nc,nu,nx,mpc)
     nxp, nrp, ndp, nup = get_parameter_dims(mpc)
 
     # ==== From u' R u ====
-    H = kron(I(Nc),R);
+    # Note: R passed here may include Rr_aug from create_extended_system_and_cost
+    # For time-varying costs, we need to handle R_traj and Rr_traj separately
+    if mpc.settings.time_varying_costs
+        R_blocks = get_R_trajectory(mpc, Nc)
+        Rr_blocks = get_Rr_trajectory(mpc, Nc)
+
+        # Determine base Rr (used in system augmentation)
+        Rr_aug = !isempty(mpc.weights.Rr_traj) ? mpc.weights.Rr_traj[1] : mpc.weights.Rr
+        has_nuprev = !iszero(Rr_aug) || any(!iszero(rr) for rr in Rr_blocks)
+
+        # Build R blocks: R_k = R_base_k + Rr_k (where R already has Rr_aug added)
+        # So R_eff_k = R_k + (Rr_k - Rr_aug) to get proper time-varying Rr
+        if has_nuprev
+            R_eff_blocks = [R_blocks[k] + (Rr_blocks[k] - Rr_aug) for k in 1:Nc]
+        else
+            R_eff_blocks = R_blocks
+        end
+
+        H = cat([R_eff_blocks[k] for k in 1:Nc]..., dims=(1,2))
+        # Handle Nc < N case with last R
+        H[end-nu+1:end,end-nu+1:end] .+= (N-Nc)*R_eff_blocks[end]
+    else
+        H = kron(I(Nc),R)
+        H[end-nu+1:end,end-nu+1:end] .+= (N-Nc)*R # To account for Nc < N...
+    end
     f = zeros(size(H,1),1);
-    H[end-nu+1:end,end-nu+1:end] .+= (N-Nc)*R # To accound for Nc < N...
 
     # Compensate for nonzero operating point
     if(!mpc.settings.reference_tracking && !iszero(mpc.model.uo))
@@ -253,7 +329,47 @@ function objective(Φ,Γ,C,Q,R,S,Qf,N,Nc,nu,nx,mpc)
     end
 
     # ==== From (Cx)'Q(Cx) ====
-    CQCtot  = kron(I(N),Cp'*Q*Cp);
+    # Note: Q passed here may include Rr_aug block from create_extended_system_and_cost
+    # For time-varying costs, we need to handle Q_traj and Rr_traj separately
+    if mpc.settings.time_varying_costs
+        Q_blocks = get_Q_trajectory(mpc, N)
+        Rr_blocks = get_Rr_trajectory(mpc, Nc)
+
+        # Determine base Rr (used in system augmentation)
+        Rr_aug = !isempty(mpc.weights.Rr_traj) ? mpc.weights.Rr_traj[1] : mpc.weights.Rr
+        has_nuprev = nup > 0
+
+        # Build CQC blocks with time-varying contributions
+        CQC_blocks = Matrix{Float64}[]
+        for k in 1:N
+            Qk = Q_blocks[k]
+            # Get time-varying Rr for this step (use last Rr for k > Nc)
+            Rr_k = k <= Nc ? Rr_blocks[k] : Rr_blocks[Nc]
+
+            # If we have nuprev, adjust the Rr contribution in Q
+            # Q was extended with Rr_aug, so we need to adjust: Rr_k - Rr_aug
+            if has_nuprev && !isempty(mpc.weights.Rr_traj)
+                # Build extended Qk with time-varying Rr
+                Qk_ext = copy(Q)  # Start with full Q (which includes Rr_aug in the uprev block)
+                Qk_ext[1:size(Qk,1), 1:size(Qk,2)] = Qk  # Replace output block with Q_k
+                # Adjust the Rr block: Q has Rr_aug, we want Rr_k
+                uprev_start = size(Q,1) - nu + 1
+                uprev_end = size(Q,1)
+                if uprev_start > 0 && uprev_end <= size(Q,1)
+                    Qk_ext[uprev_start:uprev_end, uprev_start:uprev_end] = Rr_k
+                end
+                Qk = Qk_ext
+            end
+
+            pos_ids_Qk = findall(diag(Qk).>0)
+            Qk_filtered = Qk[pos_ids_Qk,pos_ids_Qk]
+            Ck_filtered = C[pos_ids_Qk,:]
+            push!(CQC_blocks, Ck_filtered'*Qk_filtered*Ck_filtered)
+        end
+        CQCtot = cat(CQC_blocks..., dims=(1,2))
+    else
+        CQCtot = kron(I(N),Cp'*Q*Cp)
+    end
     CQCf = Cf'*Qf*Cf + cat(mpc.weights.Qfx,zeros(nx-nxp,nx-nxp), dims=(1,2))
     CQCtot = cat(CQCtot,CQCf,dims=(1,2))
 
@@ -281,9 +397,19 @@ function objective(Φ,Γ,C,Q,R,S,Qf,N,Nc,nu,nx,mpc)
             # Needs to add terms for r to f_theta and H_theta
             # Recall that θ = [x0 r nd uprev]
             if nrp > 0
-                Fr = -Γ'*cat(kron(I(N),C_full'*Q_full), C_full'*Qf_full,dims=(1,2))
-                Fr = Fr[:,ny+1:end] # First reference superfluous
-                Hr = cat(kron(I(N-1),Q_full),Qf_full,dims=(1,2))
+                if mpc.settings.time_varying_costs && !isempty(mpc.weights.Q_traj)
+                    # Time-varying Q for reference preview: build block diagonal
+                    Q_blocks = get_Q_trajectory(mpc, N)
+                    CQr_blocks = [C_full'*Q_blocks[k][1:ny,1:ny] for k in 1:N]
+                    Fr = -Γ'*cat(cat(CQr_blocks..., dims=(1,2)), C_full'*Qf_full, dims=(1,2))
+                    Fr = Fr[:,ny+1:end] # First reference superfluous
+                    Hr_blocks = [Q_blocks[k][1:ny,1:ny] for k in 2:N]  # N-1 blocks (k=2 to N)
+                    Hr = cat(Hr_blocks..., Qf_full, dims=(1,2))
+                else
+                    Fr = -Γ'*cat(kron(I(N),C_full'*Q_full), C_full'*Qf_full,dims=(1,2))
+                    Fr = Fr[:,ny+1:end] # First reference superfluous
+                    Hr = cat(kron(I(N-1),Q_full),Qf_full,dims=(1,2))
+                end
                 if mpc.settings.reference_condensation
                     Is = repeat(I(ny),mpc.Np)
                     if(isempty(mpc.settings.traj2setpoint))
@@ -461,17 +587,22 @@ function create_extended_system_and_cost(mpc::MPC)
         C = [C mpc.model.Dd]
     end
 
-    if(nuprev > 0) # Penalizing Δu -> add uold to states 
+    if(nuprev > 0) # Penalizing Δu -> add uold to states
+        # For time-varying Rr, use first element for system augmentation
+        # The actual time-varying costs are handled in objective()
+        Rr_aug = mpc.settings.time_varying_costs && !isempty(mpc.weights.Rr_traj) ?
+                 mpc.weights.Rr_traj[1] : Rr
+
         F = cat(F,zeros(nu,nu),dims=(1,2))
         F[end-nu+1:end,1:nx] .= -mpc.K
         G = [G;I(nu)]
         nye,nxe = size(C)
         C = [C zeros(nye,nu); mpc.K zeros(nu,nxe-nx) I(nu)]
-        Q = cat(Q,Rr,dims=(1,2))
+        Q = cat(Q,Rr_aug,dims=(1,2))
         Qf = cat(Qf,zeros(nu,nu),dims=(1,2))
-        S = [S;-Rr];
-        S[1:nx,:] -=mpc.K'*Rr
-        R+=Rr
+        S = [S;-Rr_aug];
+        S[1:nx,:] -=mpc.K'*Rr_aug
+        R+=Rr_aug
     end
 
     if(!iszero(mpc.weights.R) && !iszero(mpc.K)) # terms from prestabilizing feedback

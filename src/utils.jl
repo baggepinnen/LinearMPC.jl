@@ -1,15 +1,21 @@
 """
-    compute_control(mpc,x;r,uprev)
+    compute_control(mpc,x;r,uprev,Q_traj,R_traj,Rr_traj)
 
-For a given MPC `mpc` and state `x`, compute the optimal control action. 
+For a given MPC `mpc` and state `x`, compute the optimal control action.
 
-Optional arguments: 
+Optional arguments:
 * `r` - reference value. Can be:
   - Vector of length `ny` for constant reference
   - Matrix of size `(ny, Np)` for reference preview (when `mpc.settings.reference_preview = true`)
 * `uprev` - previous control action
+* `Q_traj` - time-varying Q matrices (vector of Np matrices)
+* `R_traj` - time-varying R matrices (vector of Nc matrices)
+* `Rr_traj` - time-varying Rr matrices (vector of Nc matrices)
 
 All arguments default to zero.
+
+When cost trajectories are provided, the QP is rebuilt only if they differ from
+previously cached values. This allows efficient runtime override of costs.
 
 # Examples
 ```julia
@@ -20,14 +26,54 @@ u = compute_control(mpc, x; r=[1.0, 0.0])
 r_trajectory = [1.0 1.5 2.0 2.0 2.0;   # ny × Np matrix
                 0.0 0.0 0.5 1.0 1.0]
 u = compute_control(mpc, x; r=r_trajectory)
+
+# Time-varying costs
+Q_traj = [diagm([1.0, 1.0]) for _ in 1:10]
+Q_traj[end] = diagm([10.0, 10.0])  # Higher weight at end
+u = compute_control(mpc, x; r=[1.0, 0.0], Q_traj=Q_traj)
 ```
 """
-function compute_control(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true)
+function compute_control(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true,
+                         Q_traj=nothing, R_traj=nothing, Rr_traj=nothing)
+    # Handle runtime cost trajectory override with cache & detect
+    if cost_trajectories_changed(mpc, Q_traj, R_traj, Rr_traj)
+        update_cost_trajectories!(mpc, Q_traj, R_traj, Rr_traj)
+        setup!(mpc)
+    end
+
     θ = form_parameter(mpc,x,r,d,uprev)
     udaqp,fval,exitflag,info = solve(mpc,θ)
     check && @assert(exitflag>=1)
     mpc.uprev = udaqp[1:mpc.model.nu]-mpc.K*θ[1:mpc.model.nx]
     return mpc.uprev
+end
+
+"""
+Check if cost trajectories have changed from cached values.
+"""
+function cost_trajectories_changed(mpc::MPC, Q_traj, R_traj, Rr_traj)
+    (!isnothing(Q_traj) && Q_traj != mpc.weights.Q_traj) ||
+    (!isnothing(R_traj) && R_traj != mpc.weights.R_traj) ||
+    (!isnothing(Rr_traj) && Rr_traj != mpc.weights.Rr_traj)
+end
+
+"""
+Update cached cost trajectories and enable time-varying costs.
+"""
+function update_cost_trajectories!(mpc::MPC, Q_traj, R_traj, Rr_traj)
+    if !isnothing(Q_traj)
+        mpc.weights.Q_traj = [matrixify(q, mpc.model.ny) for q in Q_traj]
+    end
+    if !isnothing(R_traj)
+        mpc.weights.R_traj = [matrixify(r, mpc.model.nu) for r in R_traj]
+    end
+    if !isnothing(Rr_traj)
+        mpc.weights.Rr_traj = [matrixify(rr, mpc.model.nu) for rr in Rr_traj]
+    end
+    mpc.settings.time_varying_costs = !isempty(mpc.weights.Q_traj) ||
+                                       !isempty(mpc.weights.R_traj) ||
+                                       !isempty(mpc.weights.Rr_traj)
+    mpc.mpqp_issetup = false
 end
 
 function compute_control(empc::ExplicitMPC,x;r=nothing,d=nothing,uprev=nothing, check=true)

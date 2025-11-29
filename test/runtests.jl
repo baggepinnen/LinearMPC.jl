@@ -567,4 +567,126 @@ global templib
         sim = LinearMPC.Simulation(mpc;x0 = [0.1;0], N = 100)
         @test norm(sim.xs[:,end]-xo) < 1e-4
     end
+
+    @testset "Time-varying costs" begin
+        # Test basic time-varying Q
+        A = [1 1; 0 1]
+        B = [0; 1]
+        C = [1.0 0; 0 1.0]
+        Np, Nc = 5, 3
+        mpc = LinearMPC.MPC(A, B; C, Np=Np, Nc=Nc)
+        set_bounds!(mpc; umin=[-2.0], umax=[2.0])
+
+        # First test with constant costs
+        set_objective!(mpc; Q=[1.0, 1.0], R=[0.1])
+        setup!(mpc)
+        x0 = [1.0, 0.0]
+        u_constant = compute_control(mpc, x0; r=[0.0, 0.0])
+
+        # Test time-varying Q - higher weight at end of horizon
+        Q_traj = [diagm([1.0, 1.0]) for _ in 1:Np]
+        Q_traj[end] = diagm([10.0, 10.0])  # Higher terminal weight
+        set_objective!(mpc; Q_traj=Q_traj, R=[0.1])
+        setup!(mpc)
+        @test mpc.settings.time_varying_costs == true
+        u_varying_Q = compute_control(mpc, x0; r=[0.0, 0.0])
+
+        # Control should be different due to higher terminal weight
+        @test length(u_varying_Q) == 1
+        # Higher terminal Q should lead to more aggressive control
+        @test abs(u_varying_Q[1]) >= abs(u_constant[1]) - 1e-6
+
+        # Test time-varying R
+        R_traj = [diagm([0.1]) for _ in 1:Nc]
+        R_traj[1] = diagm([1.0])  # Higher weight on first control
+        set_objective!(mpc; Q=[1.0, 1.0], R_traj=R_traj)
+        setup!(mpc)
+        @test mpc.settings.time_varying_costs == true
+        u_varying_R = compute_control(mpc, x0; r=[0.0, 0.0])
+
+        # Higher R at first step should reduce first control magnitude
+        @test abs(u_varying_R[1]) <= abs(u_constant[1]) + 1e-6
+
+        # Test backward compatibility - empty trajectories should give same result
+        set_objective!(mpc; Q=[1.0, 1.0], R=[0.1])
+        setup!(mpc)
+        @test mpc.settings.time_varying_costs == false
+        u_backward_compat = compute_control(mpc, x0; r=[0.0, 0.0])
+        @test norm(u_backward_compat - u_constant) < 1e-10
+    end
+
+    @testset "Time-varying costs with Rr" begin
+        # Test time-varying Rr (control rate penalty)
+        A = [1 1; 0 1]
+        B = [0; 1]
+        C = [1.0 0; 0 1.0]
+        Np, Nc = 5, 3
+        mpc = LinearMPC.MPC(A, B; C, Np=Np, Nc=Nc)
+        set_bounds!(mpc; umin=[-2.0], umax=[2.0])
+
+        # Test with constant Rr first
+        set_objective!(mpc; Q=[1.0, 1.0], R=[0.1], Rr=[0.5])
+        setup!(mpc)
+        x0 = [1.0, 0.0]
+        u_constant_Rr = compute_control(mpc, x0; r=[0.0, 0.0])
+
+        # Time-varying Rr - higher penalty on later steps
+        Rr_traj = [diagm([0.1]) for _ in 1:Nc]
+        Rr_traj[end] = diagm([1.0])  # Higher rate penalty at end
+        set_objective!(mpc; Q=[1.0, 1.0], R=[0.1], Rr_traj=Rr_traj)
+        setup!(mpc)
+        @test mpc.settings.time_varying_costs == true
+        u_varying_Rr = compute_control(mpc, x0; r=[0.0, 0.0])
+        @test length(u_varying_Rr) == 1
+    end
+
+    @testset "Time-varying costs runtime override" begin
+        # Test runtime override with cache & detect
+        A = [1 1; 0 1]
+        B = [0; 1]
+        C = [1.0 0; 0 1.0]
+        Np, Nc = 5, 3
+        mpc = LinearMPC.MPC(A, B; C, Np=Np, Nc=Nc)
+        set_bounds!(mpc; umin=[-2.0], umax=[2.0])
+        set_objective!(mpc; Q=[1.0, 1.0], R=[0.1])
+        setup!(mpc)
+
+        x0 = [1.0, 0.0]
+        u_base = compute_control(mpc, x0; r=[0.0, 0.0])
+
+        # Runtime override with Q_traj
+        Q_traj = [diagm([5.0, 5.0]) for _ in 1:Np]
+        u_override = compute_control(mpc, x0; r=[0.0, 0.0], Q_traj=Q_traj)
+
+        # Controls should be different
+        @test norm(u_base - u_override) > 1e-6
+
+        # Calling again with same trajectory should not rebuild (cache hit)
+        u_cached = compute_control(mpc, x0; r=[0.0, 0.0], Q_traj=Q_traj)
+        @test norm(u_override - u_cached) < 1e-10
+
+        # Different trajectory should rebuild
+        Q_traj2 = [diagm([2.0, 2.0]) for _ in 1:Np]
+        u_different = compute_control(mpc, x0; r=[0.0, 0.0], Q_traj=Q_traj2)
+        @test norm(u_override - u_different) > 1e-6
+    end
+
+    @testset "Time-varying costs trajectory padding" begin
+        # Test that trajectories shorter than horizon are properly padded
+        A = [1 1; 0 1]
+        B = [0; 1]
+        C = [1.0 0; 0 1.0]
+        Np, Nc = 10, 5  # Longer horizons
+        mpc = LinearMPC.MPC(A, B; C, Np=Np, Nc=Nc)
+        set_bounds!(mpc; umin=[-2.0], umax=[2.0])
+
+        # Provide shorter trajectory - should be padded with last element
+        Q_traj_short = [diagm([1.0, 1.0]), diagm([2.0, 2.0])]  # Only 2 elements
+        set_objective!(mpc; Q_traj=Q_traj_short, R=[0.1])
+        @test_nowarn setup!(mpc)
+
+        # Verify we can compute control
+        x0 = [1.0, 0.0]
+        @test_nowarn compute_control(mpc, x0; r=[0.0, 0.0])
+    end
 end

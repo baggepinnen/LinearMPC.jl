@@ -17,27 +17,33 @@ struct Constraint
 end
 
 # Weights used to define the objective function of the OCP
-struct MPCWeights
+mutable struct MPCWeights
     Q::Matrix{Float64}
     R::Matrix{Float64}
     Rr::Matrix{Float64}
     S::Matrix{Float64}
     Qf::Matrix{Float64}
     Qfx::Matrix{Float64}
+    # Time-varying trajectories (empty = use constant Q/R/Rr)
+    Q_traj::Vector{Matrix{Float64}}   # Length Np, each ny × ny
+    R_traj::Vector{Matrix{Float64}}   # Length Nc, each nu × nu
+    Rr_traj::Vector{Matrix{Float64}}  # Length Nc, each nu × nu
 end
 
 function MPCWeights(nu,nx,nr)
     return MPCWeights(Matrix{Float64}(I,nr,nr),Matrix{Float64}(I,nu,nu),zeros(nu,nu),
-                      zeros(nx,nu),zeros(nr,nr),zeros(nx,nx))
+                      zeros(nx,nu),zeros(nr,nr),zeros(nx,nx),
+                      Matrix{Float64}[], Matrix{Float64}[], Matrix{Float64}[])
 end
 
 """
 MPC controller settings.
 
 # Fields
-- `reference_condensation::Bool = false`: Collapse reference trajectory to setpoint 
+- `reference_condensation::Bool = false`: Collapse reference trajectory to setpoint
 - `reference_tracking::Bool = true`: Enable reference tracking
 - `reference_preview::Bool = false`: Enable time-varying reference preview
+- `time_varying_costs::Bool = false`: Enable time-varying cost matrices Q, R, Rr
 - `soft_weight::Float64 = 1e6`: Penalty weight for soft constraint violations
 - `solver_opts::Dict{Symbol,Any}`: Additional solver options
 """
@@ -46,6 +52,7 @@ Base.@kwdef mutable struct MPCSettings
     reference_condensation::Bool= false
     reference_tracking::Bool= true
     reference_preview::Bool = false
+    time_varying_costs::Bool = false
     soft_weight::Float64= 1e6
     solver_opts::Dict{Symbol,Any} = Dict()
     traj2setpoint::Matrix{Float64} = zeros(0,0)
