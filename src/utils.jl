@@ -1,3 +1,8 @@
+fszeros(n::Int) = fill!(FixedSizeVectorDefault{Float64}(undef, n), 0.0)
+fszeros(nr::Int, nc::Int) = fill!(FixedSizeMatrixDefault{Float64}(undef, nr, nc), 0.0)
+fs(M::AbstractMatrix{T}) where T = FixedSizeMatrixDefault{float(T)}(M)
+fs(v::AbstractVector{T}) where T = FixedSizeVectorDefault{float(T)}(v)
+
 """
     compute_control(mpc,x;r,uprev)
 
@@ -56,10 +61,10 @@ end
 Format reference input for MPC controller. Handles both single reference 
 and reference preview scenarios.
 """
-function format_reference(mpc::Union{MPC,ExplicitMPC}, r)
-    !mpc.settings.reference_tracking && return zeros(0)
+@views function format_reference(mpc::Union{MPC,ExplicitMPC}, r)
+    !mpc.settings.reference_tracking && return fszeros(0)
     if isnothing(r) 
-        r = zeros(mpc.model.ny)
+        r = fszeros(mpc.model.ny)
     end
     isempty(r) && return r
     
