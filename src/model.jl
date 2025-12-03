@@ -14,19 +14,19 @@ function Labels(nx::Int,nu::Int,ny::Int,nd::Int)
 end
 
 struct Model
-    F::Matrix{Float64}
-    G::Matrix{Float64}
-    Gd::Matrix{Float64}
-    offset::Vector{Float64}
+    F::FixedSizeMatrixDefault{Float64}
+    G::FixedSizeMatrixDefault{Float64}
+    Gd::FixedSizeMatrixDefault{Float64}
+    offset::FixedSizeVectorDefault{Float64}
 
-    xo::Vector{Float64}
-    uo::Vector{Float64}
+    xo::FixedSizeVectorDefault{Float64}
+    uo::FixedSizeVectorDefault{Float64}
 
-    wmin::Vector{Float64}
-    wmax::Vector{Float64}
+    wmin::FixedSizeVectorDefault{Float64}
+    wmax::FixedSizeVectorDefault{Float64}
 
-    C::Matrix{Float64}
-    Dd::Matrix{Float64}
+    C::FixedSizeMatrixDefault{Float64}
+    Dd::FixedSizeMatrixDefault{Float64}
 
     true_dynamics::Function
     
@@ -63,8 +63,8 @@ function Model(F,G;Ts=-1.0, C = zeros(0,0), Gd = zeros(0,0), offset=zeros(0), xo
     Gd = [Gd zeros(nx,nd-size(Gd,2))]
     Dd = [Dd zeros(ny,nd-size(Dd,2))]
     true_dynamics = isnothing(true_dynamics) ? (x,u,d)->F*x+G*u+Gd*d+offset : true_dynamics
-    Model(float(F),float(G),float(Gd), float(offset), float(xo), float(uo),
-          float(wmin), float(wmax), float(C),float(Dd), true_dynamics,
+    Model(fs(F),fs(G),fs(Gd), fs(offset), fs(xo), fs(uo),
+          fs(wmin), fs(wmax), fs(C),fs(Dd), true_dynamics,
           nx,nu,ny,nd,Ts,Labels(nx,nu,ny,nd))
 end
 

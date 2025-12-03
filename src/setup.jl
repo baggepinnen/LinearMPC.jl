@@ -7,7 +7,7 @@ Internally, this means generating an mpQP, and setting up a DAQP workspace.
 function setup!(mpc::MPC)
     mpc.mpQP = mpc2mpqp(mpc)
     bu,bl = mpc.mpQP.bu[:],mpc.mpQP.bl[:]
-    setup_flag,_ = DAQP.setup(mpc.opt_model, mpc.mpQP.H,mpc.mpQP.f[:],mpc.mpQP.A,bu,bl,mpc.mpQP.senses;break_points=mpc.mpQP.break_points)
+    setup_flag,_ = DAQP.setup(mpc.opt_model, mpc.mpQP.H, mpc.mpQP.f[:], mpc.mpQP.A, Vector(bu), Vector(bl), mpc.mpQP.senses; break_points=mpc.mpQP.break_points)
     if(setup_flag < 0)
         @warn " Cannot setup optimization problem " setup_flag
     else
@@ -28,8 +28,8 @@ function set_input_bounds!(mpc::MPC; umin=zeros(0), umax=zeros(0))
     nb == 0 && return
     nb != mpc.model.nu  && @error("# of controls are $(mpc.model.nu), got bounds of dimension $nb")
 
-    mpc.umin = [umin;-1e30*ones(nb-nmin)]
-    mpc.umax = [umax;+1e30*ones(nb-nmax)]
+    mpc.umin = fs([umin;-1e30*ones(nb-nmin)])
+    mpc.umax = fs([umax;+1e30*ones(nb-nmax)])
     mpc.mpqp_issetup = false
 end
 

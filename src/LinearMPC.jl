@@ -1,6 +1,7 @@
 module LinearMPC
 using LinearAlgebra
 using DAQPBase
+using FixedSizeArrays
 const DAQP = DAQPBase
 export DAQP
 

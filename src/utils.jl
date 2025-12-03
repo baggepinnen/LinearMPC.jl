@@ -22,11 +22,13 @@ r_trajectory = [1.0 1.5 2.0 2.0 2.0;   # ny × Np matrix
 u = compute_control(mpc, x; r=r_trajectory)
 ```
 """
-function compute_control(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true)
+@views function compute_control(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true)
     θ = form_parameter(mpc,x,r,d,uprev)
     udaqp,fval,exitflag,info = solve(mpc,θ)
     check && @assert(exitflag>=1)
-    mpc.uprev = udaqp[1:mpc.model.nu]-mpc.K*θ[1:mpc.model.nx]
+    # mpc.uprev = udaqp[1:mpc.model.nu]-mpc.K*θ[1:mpc.model.nx]
+    mpc.uprev .= udaqp[1:mpc.model.nu]
+    mul!(mpc.uprev, mpc.K, θ[1:mpc.model.nx], -1, 1)
     return mpc.uprev
 end
 
@@ -38,11 +40,13 @@ function compute_control(empc::ExplicitMPC,x;r=nothing,d=nothing,uprev=nothing, 
     end
 end
 
-function compute_control_trajectory(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true)
+@views function compute_control_trajectory(mpc::MPC,x;r=nothing,d=nothing,uprev=nothing, check=true)
     θ = form_parameter(mpc,x,r,d,uprev)
     udaqp,_,exitflag,_ = solve(mpc,θ)
     check && @assert(exitflag>=1)
-    mpc.uprev = udaqp[1:mpc.model.nu]-mpc.K*θ[1:mpc.model.nx]
+    # mpc.uprev = udaqp[1:mpc.model.nu]-mpc.K*θ[1:mpc.model.nx]
+    mpc.uprev .= udaqp[1:mpc.model.nu]
+    mul!(mpc.uprev, mpc.K, θ[1:mpc.model.nx], -1, 1)
     return udaqp
 end
 

@@ -1,16 +1,16 @@
 # lb <= Au uk + Ax xk <= ub for k ∈ ks
 # (additional terms Ar rₖ, Aw wₖ, Ad dₖ, Aup u⁻ₖ)
 
-struct Constraint
-    Au::Matrix{Float64}
-    Ax::Matrix{Float64}
-    Ar::Matrix{Float64}
-    Aw::Matrix{Float64}
-    Ad::Matrix{Float64}
-    Aup::Matrix{Float64}
+struct Constraint{KST <: AbstractVector{Int64}}
+    Au::FixedSizeMatrixDefault{Float64}
+    Ax::FixedSizeMatrixDefault{Float64}
+    Ar::FixedSizeMatrixDefault{Float64}
+    Aw::FixedSizeMatrixDefault{Float64}
+    Ad::FixedSizeMatrixDefault{Float64}
+    Aup::FixedSizeMatrixDefault{Float64}
     ub::Vector{Float64}
     lb::Vector{Float64}
-    ks::AbstractVector{Int64}
+    ks::KST
     soft::Bool
     binary::Bool
     prio::Int
@@ -18,17 +18,17 @@ end
 
 # Weights used to define the objective function of the OCP
 struct MPCWeights
-    Q::Matrix{Float64}
-    R::Matrix{Float64}
-    Rr::Matrix{Float64}
-    S::Matrix{Float64}
-    Qf::Matrix{Float64}
-    Qfx::Matrix{Float64}
+    Q::FixedSizeMatrixDefault{Float64}
+    R::FixedSizeMatrixDefault{Float64}
+    Rr::FixedSizeMatrixDefault{Float64}
+    S::FixedSizeMatrixDefault{Float64}
+    Qf::FixedSizeMatrixDefault{Float64}
+    Qfx::FixedSizeMatrixDefault{Float64}
 end
 
 function MPCWeights(nu,nx,nr)
-    return MPCWeights(Matrix{Float64}(I,nr,nr),Matrix{Float64}(I,nu,nu),zeros(nu,nu),
-                      zeros(nx,nu),zeros(nr,nr),zeros(nx,nx))
+    return MPCWeights(fs(1.0*I(nr)),fs(1.0*I(nu)),fszeros(nu,nu),
+                      fszeros(nx,nu),fszeros(nr,nr),fszeros(nx,nx))
 end
 
 """
@@ -48,7 +48,7 @@ Base.@kwdef mutable struct MPCSettings
     reference_preview::Bool = false
     soft_weight::Float64= 1e6
     solver_opts::Dict{Symbol,Any} = Dict()
-    traj2setpoint::Matrix{Float64} = zeros(0,0)
+    traj2setpoint::FixedSizeMatrixDefault{Float64} = fszeros(0,0)
 end
 
 # MPC controller
@@ -68,12 +68,12 @@ mutable struct MPC
     weights::MPCWeights
 
     # lb <= u <=ub
-    umin::Vector{Float64}
-    umax::Vector{Float64}
-    binary_controls::Vector{Int64}
+    umin::FixedSizeVectorDefault{Float64}
+    umax::FixedSizeVectorDefault{Float64}
+    binary_controls::FixedSizeVectorDefault{Int64}
 
     # General constraints 
-    constraints::Vector{Constraint}
+    constraints::Vector{<:Constraint}
 
     # Settings
     settings::MPCSettings
@@ -85,37 +85,37 @@ mutable struct MPC
     opt_model::DAQPBase.Model
 
     # Prestabilizing feedback
-    K::Matrix{Float64}
+    K::FixedSizeMatrixDefault{Float64}
 
     # Move blocks
-    move_blocks::Vector{Int}
+    move_blocks::FixedSizeVectorDefault{Int}
 
     mpqp_issetup::Bool
 
-    uprev::Vector{Float64}
+    uprev::FixedSizeVectorDefault{Float64}
 
-    traj2setpoint::Matrix{Float64}
+    traj2setpoint::FixedSizeMatrixDefault{Float64}
 
     state_observer
 
-    Δx0::Vector{Float64}
+    Δx0::FixedSizeVectorDefault{Float64}
 end
 
 function MPC(model::Model;Np=10,Nc=Np)
     MPC(model,0,0,Np,Nc,
         MPCWeights(model.nu,model.nx,model.ny),
-        zeros(0),zeros(0),zeros(0),
+        fszeros(0),fszeros(0),FixedSizeVector(Int[]),
         Constraint[],MPCSettings(),nothing,
-        DAQP.Model(),zeros(model.nu,model.nx),Int[],false, zeros(model.nu),zeros(0,0),
-       nothing,zeros(model.nx))
+        DAQP.Model(),fszeros(model.nu,model.nx),FixedSizeVector(Int[]),false, fszeros(model.nu),fszeros(0,0),
+       nothing,fszeros(model.nx))
 end
 
-function MPC(F,G;Gd=zeros(0,0), C=zeros(0,0), Dd= zeros(0,0), offset=zeros(0), Ts= -1.0, Np=10, Nc = Np)
-    MPC(Model(F,G;Gd,offset,C,Dd,Ts);Np,Nc);
+function MPC(F,G;Gd=fszeros(0,0), C=fszeros(0,0), Dd= fszeros(0,0), offset=fszeros(0), Ts= -1.0, Np=10, Nc = Np)
+    MPC(Model(fs(F),fs(G);Gd=fs(Gd),offset=fs(offset),C=fs(C),Dd=fs(Dd),Ts=Ts);Np,Nc);
 end
 
-function MPC(A,B,Ts::Float64; Bd = zeros(0,0), offset=zeros(0), C = zeros(0,0), Dd = zeros(0,0), Np=10, Nc=Np)
-    MPC(Model(A,B,Ts;Bd,offset,C,Dd);Np,Nc)
+function MPC(A,B,Ts::Float64; Bd = fszeros(0,0), offset=fszeros(0), C = fszeros(0,0), Dd = fszeros(0,0), Np=10, Nc=Np)
+    MPC(Model(fs(A),fs(B),Ts; Bd=fs(Bd), offset=fs(offset),C=fs(C),Dd=fs(Dd));Np,Nc)
 end
 
 function MPC(sys; Ts=1.0, Np=10, Nc=Np)
