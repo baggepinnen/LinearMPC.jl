@@ -467,8 +467,16 @@ function create_objective(mpc::MPC,F,Φ,Γ,C,w::MPCWeights,nu::Int,nx::Int)
     # f_theta & H_theta for state parameters
     f_theta  = Γ'*CQCtot*Φ; # from x0
     H_theta  = Φ'*CQCtot*Φ
-    if(!mpc.settings.reference_tracking && !iszero(mpc.model.xo))
-        f -= Γ'*CQCtot*repeat([mpc.model.xo;zeros(nx-nxp)],N+1)
+    if(!iszero(mpc.model.xo))
+        if(!mpc.settings.reference_tracking)
+            f -= Γ'*CQCtot*repeat([mpc.model.xo;zeros(nx-nxp)],N+1)
+        elseif(!iszero(mpc.weights.Qfx))
+            # Under reference tracking the output cost is already centered on the reference, so only
+            # the terminal state weight is centered on the operating point.
+            Xo = zeros((N+1)*nx,1)
+            Xo[N*nx+1:N*nx+nxp] = mpc.weights.Qfx*mpc.model.xo
+            f -= Γ'*Xo
+        end
     end
 
     # ==== From x' S u ====

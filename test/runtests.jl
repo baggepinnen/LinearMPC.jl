@@ -1284,6 +1284,50 @@ Random.seed!(1234)
         @test norm(sim.xs[:,end]-xo) < 1e-4
     end
 
+    @testset "Terminal cost centered on the operating point" begin
+        F,G = [1 0.1; 0 1], [0.005;0.1;;] # double integrator with Ts=0.1
+        C = [1.0 0.0]
+        xo = [1.0, 0.0] # a steady state of the plant, held with u = 0
+
+        # The Riccati solution is a property of the model and the stage weights alone: it depends on
+        # neither the operating point nor the reference setting.
+        function terminal_weight(tracking, x)
+            m = LinearMPC.MPC(LinearMPC.Model(F,G;C,Ts=0.1,xo=x);Np=10)
+            m.settings.reference_tracking = tracking
+            set_objective!(m;Q=[1.0],R=[0.1])
+            set_terminal_cost!(m)
+            m.weights.Qfx
+        end
+        P = terminal_weight(false, zeros(2))
+        @test P ≈ terminal_weight(true, zeros(2))
+        @test P ≈ terminal_weight(true, xo)
+
+        # Under tracking the terminal weight enters the constant term of the condensed QP, and only
+        # through the operating point: the stage output cost is centered on the reference instead.
+        function tracking_mpc(x)
+            m = LinearMPC.MPC(LinearMPC.Model(F,G;C,Ts=0.1,xo=x);Np=10,Nc=5)
+            set_objective!(m;Q=[1.0],R=[0.0],Rr=[0.1])
+            set_terminal_cost!(m)
+            setup!(m)
+            m
+        end
+        @test iszero(tracking_mpc(zeros(2)).mpQP.f)
+        @test !iszero(tracking_mpc(xo).mpQP.f)
+
+        # Tracking the output of the operating point is then the same problem as regulating to it:
+        # with R = 0 the stage costs agree as well, so the two give the same control.
+        reg = tracking_mpc(xo)
+        reg.settings.reference_tracking = false
+        setup!(reg)
+        trk = tracking_mpc(xo)
+        for x0 in ([0.0,0.0], [2.0,-0.3], [1.0,0.5])
+            @test compute_control(reg,x0;uprev=[0.0]) ≈ compute_control(trk,x0;r=C*xo,uprev=[0.0]) atol=1e-8
+        end
+
+        # The operating point is a fixed point of the tracking loop that aims at its output.
+        @test compute_control(trk,xo;r=C*xo,uprev=[0.0]) ≈ [0.0] atol=1e-8
+    end
+
     @testset "Generalized Parameters in Objective" begin
         A = [1 1; 0 1]
         B = [0; 1]
@@ -1791,9 +1835,12 @@ Random.seed!(1234)
         add_constraint!(mpc; Ax=[1.0;;], ub=zeros(0), lb=zeros(0))
         @test length(mpc.constraints) == n_constraints
 
+        # The LQR terminal cost is centered on the operating point, not on the reference, so it is
+        # available for tracking problems as well.
         tracked = LinearMPC.MPC([1.0;;], [1.0;;]; C=[1.0;;], Np=2)
         set_objective!(tracked; Q=[1.0], R=[1.0])
-        @test false == (@test_logs (:warn, r"LQR cost not valid for reference tracking problems") LinearMPC.set_terminal_cost!(tracked))
+        @test_logs LinearMPC.set_terminal_cost!(tracked)
+        @test !iszero(tracked.weights.Qfx)
 
         @test_logs (:warn, r"The setting \"does_not_exist\" does not exist") (:warn, r"The setting \"does_not_exist\" does not exist") settings!(tracked; does_not_exist=true)
         @test_logs (:warn, r"The setting \"still_missing\" does not exist") settings!(tracked, Dict(:still_missing => true))
