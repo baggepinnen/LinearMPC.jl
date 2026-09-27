@@ -122,6 +122,15 @@ Random.seed!(1234)
         mpc = LinearMPC.MPC(LinearMPC.Model(fill(0.5, 1, 1), [1.0 1.0]); Np = 5)
         @test_throws ArgumentError set_binary_controls!(mpc, [1, 2], [3])
     end
+    @testset "Binary regularization only over the binary horizon" begin
+        # The control has no effect and a small cost, so its optimum is 0 wherever it is relaxed
+        mpc = LinearMPC.MPC(LinearMPC.Model(fill(0.5, 1, 1), [0.0;;]; C = [1.0;;]); Np = 6, Nc = 6)
+        set_objective!(mpc; Q = [1.0], R = [0.01])
+        set_input_bounds!(mpc; umin = [0.0], umax = [1.0])
+        set_binary_controls!(mpc, [1], 2)
+        U = LinearMPC.compute_control_trajectory(mpc, [0.0]; r = [0.0])
+        @test maximum(abs, U) < 1e-6
+    end
     @testset "Equality constraints with binary controls" begin
         # u₁ ∈ {0, 1} binary, u₂ continuous, and the equality u₂ = 2u₁ at every step
         function eqmpc()
