@@ -38,14 +38,6 @@ int mpc_compute_control(c_float* control, c_float* state, c_float* reference, c_
     daqp_work.reuse_ind=0; // clear workspace cache
 
 #ifdef DAQP_BNB
-    daqp_node_cleanup_workspace(0, &daqp_work);
-#if N_EQUALITY > 0
-    // The cleanup removes the equality constraints from the working set as well, and daqp_bnb takes
-    // the constraints active on entry as the equality constraints of the problem: reactivate them
-    for(int i = 0; i < N_EQUALITY; i++) daqp_work.sense[equality_ids[i]] |= DAQP_ACTIVE + DAQP_IMMUTABLE;
-    reset_daqp_workspace(&daqp_work);
-    daqp_activate_constraints(&daqp_work);
-#endif
     int exitflag = daqp_bnb(&daqp_work);
 #else
 #ifndef DAQP_WARMSTART

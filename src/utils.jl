@@ -274,16 +274,7 @@ function solve(mpc::MPC,θ)
     mpc.mpQP._bl .= mpc.mpQP.bl .+ mpc.mpQP._bth
     mul!(mpc.mpQP._f, mpc.mpQP.f_theta, θ)
     mpc.mpQP._f .+= mpc.mpQP.f
-    if mpc.mpQP.has_binaries # Make sure workspace is clean
-        ccall(("daqp_node_cleanup_workspace", DAQP.libdaqp),
-              Cvoid,(Cint,Ptr{DAQP.Workspace}),0, mpc.opt_model.work)
-        # The cleanup removes the equality constraints from the working set as well, and daqp_bnb
-        # takes the constraints active on entry as the equality constraints of the problem: passing
-        # the senses reactivates them
-        DAQP.update(mpc.opt_model,nothing,mpc.mpQP._f,nothing,mpc.mpQP._bu,mpc.mpQP._bl,mpc.mpQP.senses)
-    else
-        DAQP.update(mpc.opt_model,nothing,mpc.mpQP._f,nothing,mpc.mpQP._bu,mpc.mpQP._bl,nothing)
-    end
+    DAQP.update(mpc.opt_model,nothing,mpc.mpQP._f,nothing,mpc.mpQP._bu,mpc.mpQP._bl,nothing)
     return DAQP.solve(mpc.opt_model)
 end
 
@@ -351,7 +342,7 @@ function make_singlesided(mpQP;single_soft=false, soft_weight=1e6)
     if(any(soft_mask))
         soft_ids = findall(soft_mask)
 
-        R = cholesky((mpQP.H+mpQP.H')/2)
+        R = hessian_factor(mpQP)
         Ms= A0[soft_mask,:]/R.U
         norm_factors = [norm(view(Ms,i,:),2) for i in 1:size(Ms,1)]
 
