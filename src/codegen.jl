@@ -201,10 +201,6 @@ function render_mpc_workspace(mpc;fname="mpc_workspace",dir="",fmode="w", float_
     close(fmpc_h)
 
     @printf(fsrc, "#include \"%s.h\"\n",fname);
-    eq_ids = findall(s -> s & DAQP.EQUALITY == DAQP.EQUALITY, mpc.mpQP.senses) .- 1
-    if !isempty(eq_ids)
-        @printf(fsrc, "static const int equality_ids[%d] = {%s};\n", length(eq_ids), join(eq_ids, ", "))
-    end
     fmpc_para = open(joinpath(dirname(pathof(LinearMPC)),"../codegen/mpc_update_parameter.c"), "r");
     write(fsrc, read(fmpc_para))
     close(fmpc_para)

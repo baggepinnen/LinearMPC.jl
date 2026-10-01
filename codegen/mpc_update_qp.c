@@ -38,6 +38,12 @@ int mpc_compute_control(c_float* control, c_float* state, c_float* reference, c_
     daqp_work.reuse_ind=0; // clear workspace cache
 
 #ifdef DAQP_BNB
+#if N_EQUALITY > 0
+    // The workspace is rendered with an empty working set, and daqp_bnb takes the immutable
+    // constraints in the working set on entry as the equality constraints of the problem: activate
+    // them on the first call (daqp_bnb keeps them in the working set for the following calls)
+    if(daqp_work.n_active == 0) daqp_activate_constraints(&daqp_work);
+#endif
     int exitflag = daqp_bnb(&daqp_work);
 #else
 #ifndef DAQP_WARMSTART
