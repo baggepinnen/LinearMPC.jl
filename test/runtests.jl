@@ -728,16 +728,15 @@ Random.seed!(1234)
     end
 
     @testset "Disturbance Preview with control-state cross term" begin
-        # Completing the square around a static feedback: with Q = L'L, S = L', R = I the
-        # unconstrained optimizer is u = -L x at every horizon, for ANY disturbance trajectory
-        # (u_k = -L x_k gives zero stage cost regardless of d). This pins down the S cross
-        # term's disturbance-preview columns in the condensed objective.
+        # With Q = L'L, S = L' and R = I the stage cost is (u + L x)'(u + L x), so the unconstrained
+        # optimum is u = -L x for every disturbance trajectory, which requires the disturbance-preview
+        # columns of the S cross term in the condensed objective.
         A = [1.0 0.1; 0.0 1.0]
         B = [0.005; 0.1]
         Gd = [0.005; 0.1]
         L = [1.2 0.8]
-        # Qf = -I is the "true zero terminal cost" idiom (non-positive diagonal entries are
-        # dropped by the positivity filter); the preview coupling must respect the filtering.
+        # Qf = -I gives a zero terminal cost, since the non-positive diagonal entries are removed
+        # by the positivity filter; the disturbance-preview coupling must use the filtered weights.
         for Qf in (1e-12*Matrix(I, 2, 2), -Matrix(1.0I, 2, 2))
             mpc = LinearMPC.MPC(A, B; Gd, C=Matrix{Float64}(I, 2, 2), Np=7, Nc=7)
             set_objective!(mpc; Q=L'L, R=[1.0], S=Matrix(L'), Qf)
